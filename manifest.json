@@ -1,0 +1,42 @@
+{
+    "manifest_version": 3,
+    "name": "ニコ生無料ギフトリマインダー",
+    "description": "イベント開催中、無料ギフト福引をポップアップ表示します。",
+    "version": "1.0.0",
+    "author": "MynicoTools",
+    "content_scripts": [
+        {
+            "matches": [
+                "https://live.nicovideo.jp/watch/*"
+            ],
+            "js": [
+                "main.js"
+            ],
+            "css": [
+                "main.css"
+            ]
+        },
+        {
+            "matches": [
+                "https://blog.nicovideo.jp/niconews/*"
+            ],
+            "js": [
+                "event.js"
+            ],
+            "css": [
+                "event.css"
+            ],
+            "run_at": "document_start"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "images/*.png"
+            ],
+            "matches": [
+                "https://*/*"
+            ]
+        }
+    ]
+}
