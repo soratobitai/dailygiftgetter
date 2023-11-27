@@ -2,26 +2,42 @@
 const url = new URL(window.location.href);
 const params = url.searchParams;
 
+// 要素定義
+let eventSection;
+let eventURL;
+
 window.addEventListener('load', async function () {
 
     // 別窓くん（別窓）の場合はスルー
     if (params.get('popup') === 'on') return;
 
-    const eventSection = document.evaluate(
+    // 要素定義
+    eventSection = document.evaluate(
         '//section[contains(@class, \'planning-event-participation-program-list-section\')]',
-        document, // 開始する要素
-        null, // 名前空間の接頭辞
-        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, // 戻り値の種類
-        null, //既に存在するXPathResult
+        document,
+        null,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+        null,
     ).snapshotItem(0);
 
     if (!eventSection) return null;
 
+    // 福引ポップアップを開く
+    await openPopup();
+
+    // 福引バナーをライブ画面の下に挿入
+    await insertBanner();
+
+});
+
+/**
+ * 福引ポップアップを開く
+ */
+async function openPopup() {
+
     // イベントページURLを取得
-    let eventURL = getEventURL(eventSection);
+    eventURL = getEventURL(eventSection);
     if (!eventURL) return;
-    
-    eventURL = removeAllParameters(eventURL);
 
     // 福引ページURLを取得
     let fukubikiURL = await getFukubikiURL(eventURL);
@@ -36,6 +52,14 @@ window.addEventListener('load', async function () {
     if (res) {
         window.open(`${fukubikiURL}?&getgift=on`, null, `width=500,height=380,resizable=yes,location=no,toolbar=no,menubar=no`);
     }
+}
+
+/**
+ * 福引バナーをライブ画面の下に挿入
+ */
+async function insertBanner() {
+
+    if (!eventURL) return;
 
     // 福引バナーを取得
     const fukubikiBanner = await getFukubikiBanner(eventURL);
@@ -47,11 +71,11 @@ window.addEventListener('load', async function () {
     newDiv.appendChild(fukubikiBanner);
     newDiv.style.display = 'flex';
     newDiv.style.justifyContent = 'center';
+    newDiv.style.maxWidth = '800px';
 
     // 福引バナーを挿入
     parentElement.insertBefore(newDiv, eventSection.nextSibling);
-
-});
+}
 
 // 福引が未取得かどうかチェックする
 async function isAvailable(apiURL) {
@@ -64,7 +88,7 @@ async function isAvailable(apiURL) {
         return res.data.isAvailable;
 
     } catch (error) {
-        console.log('エラーが発生しました:', error);
+        console.error('エラーが発生しました:', error);
         return false;
     }
 }
@@ -79,7 +103,7 @@ function getEventURL(eventSection) {
     if (!eventElem || eventElem.tagName !== 'A') return null;
 
     // リンクURLを返す
-    return eventElem.href;
+    return removeAllParameters(eventElem.href);
 }
 
 // 福引ステータスAPIを取得
@@ -122,7 +146,7 @@ async function getFukubikiApi(linkUrl) {
         }
 
     } catch (error) {
-        console.log('try内エラー:', error);
+        console.error('try内エラー:', error);
         return null;
     }
 }
@@ -163,7 +187,7 @@ async function getFukubikiURL(linkUrl) {
         }
 
     } catch (error) {
-        console.log('エラーが発生しました:', error);
+        console.error('エラーが発生しました:', error);
         return null;
     }
 }
@@ -236,7 +260,7 @@ async function getFukubikiBanner(linkUrl) {
         }
 
     } catch (error) {
-        console.log('エラーが発生しました:', error);
+        console.error('エラーが発生しました:', error);
         return null;
     }
 }
