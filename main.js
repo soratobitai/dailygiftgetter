@@ -1,3 +1,9 @@
+/**
+ * メモ：
+ * 以下のページはCORS制限あり？
+ * 'https://koken.nicovideo.jp/campaigns'
+**/
+
 // クエリを取得
 const url = new URL(window.location.href);
 const params = url.searchParams;
@@ -7,6 +13,7 @@ let eventURL;
 let fukubikiElem;
 let fukubikiURL;
 let fukubikiApi;
+let fukubikiLists = [];
 
 window.addEventListener('load', async function () {
 
@@ -40,7 +47,6 @@ window.addEventListener('load', async function () {
     fukubikiApi = await getFukubikiApi();
     if (!fukubikiApi) return;
 
-
     // 福引が未取得なら福引ポップアップを開く
     if (await isAvailable()) {
         window.open(`${fukubikiURL}?&getgift=on`, null, `width=500,height=380,resizable=yes,location=no,toolbar=no,menubar=no`);
@@ -48,25 +54,58 @@ window.addEventListener('load', async function () {
 
     // 福引バナーをライブ画面の下に挿入
     await insertBanner();
-
 });
 
-/**
- * 福引バナーをライブ画面の下に挿入
- */
-async function insertBanner() {
+// 福引バナー要素を取得
+async function getFukubikiElem() {
 
-    const fukubikiBanner = await remakeFukubikiBanner(fukubikiElem);
+    try {
+        // イベントページを取得
+        const response = await fetch(eventURL, { credentials: 'include' });
+        if (!response.ok) throw new Error('リクエストに失敗しました。ステータスコード: ' + response.status);
+        const eventPageHtml = await response.text();
 
-    // 新しいDIV要素を作成する
-    const newDiv = document.createElement('div');
-    newDiv.appendChild(fukubikiBanner);
-    newDiv.style.display = 'flex';
-    newDiv.style.justifyContent = 'center';
+        // DOMオブジェクトを作成
+        const parser = new DOMParser();
+        const dom = parser.parseFromString(eventPageHtml, 'text/html');
 
-    // 福引バナーを挿入
-    const parentElement = eventSection.parentNode;
-    parentElement.insertBefore(newDiv, eventSection.nextSibling);
+        const anchorTags = dom.getElementsByTagName('a');
+
+        //////////////////////// イベントページから福引バナー要素を特定する
+        let href;
+        let imageTags;
+        let width;
+        let height;
+        let fukubikiElems = [];
+
+        for (let i = 0; i < anchorTags.length; i++) {
+
+            // 特定のURLを含むAタグかどうか
+            href = anchorTags[i].getAttribute('href');
+            if (!href || !href.includes('https://blog.nicovideo.jp/niconews/')) continue;
+
+            // 画像を含むかどうか
+            imageTags = anchorTags[i].getElementsByTagName('img');
+            if (!imageTags.length > 0) continue;
+
+            // 画像サイズ
+            width = imageTags[0].getAttribute('width');
+            height = imageTags[0].getAttribute('height');
+            if (!(width == '720' && height == '135')) continue;
+
+            fukubikiElems.push(anchorTags[i]);
+        }
+
+        if (fukubikiElems.length === 0) {
+            return null;
+        } else {
+            return fukubikiElems[0];
+        }
+
+    } catch (error) {
+        console.error('エラーが発生しました:', error);
+        return null;
+    }
 }
 
 // イベントページURLを取得
@@ -128,56 +167,6 @@ async function getFukubikiApi() {
     }
 }
 
-// 福引バナー要素を取得
-async function getFukubikiElem() {
-
-    try {
-        // イベントページを取得
-        const response = await fetch(eventURL, { credentials: 'include' });
-        if (!response.ok) throw new Error('リクエストに失敗しました。ステータスコード: ' + response.status);
-        const eventPageHtml = await response.text();
-
-        // DOMオブジェクトを作成
-        const parser = new DOMParser();
-        const dom = parser.parseFromString(eventPageHtml, 'text/html');
-
-        const anchorTags = dom.getElementsByTagName('a');
-
-        //////////////////////// イベントページから福引バナー要素を特定する
-        let href;
-        let imageTags;
-        let altText;
-        let fukubikiElems = [];
-
-        for (let i = 0; i < anchorTags.length; i++) {
-
-            // 特定のURLを含むAタグかどうか
-            href = anchorTags[i].getAttribute('href');
-            if (!href || !href.includes('https://blog.nicovideo.jp/niconews/')) continue;
-
-            // 画像を含むかどうか
-            imageTags = anchorTags[i].getElementsByTagName('img');
-            if (!imageTags.length > 0) continue;
-
-            // ALTタグに指定の文字列を持つか
-            altText = imageTags[0].getAttribute('alt');
-            if (!altText || !altText.includes('【ニコニ広告】')) continue;
-
-            fukubikiElems.push(anchorTags[i]);
-        }
-
-        if (fukubikiElems.length === 0) {
-            return null;
-        } else {
-            return fukubikiElems[0];
-        }
-
-    } catch (error) {
-        console.error('エラーが発生しました:', error);
-        return null;
-    }
-}
-
 // 福引が未取得かどうかチェックする
 async function isAvailable() {
 
@@ -192,6 +181,24 @@ async function isAvailable() {
         console.error('エラーが発生しました:', error);
         return false;
     }
+}
+
+/**
+ * 福引バナーをライブ画面の下に挿入
+ */
+async function insertBanner() {
+
+    const fukubikiBanner = await remakeFukubikiBanner(fukubikiElem);
+
+    // 新しいDIV要素を作成する
+    const newDiv = document.createElement('div');
+    newDiv.appendChild(fukubikiBanner);
+    newDiv.style.display = 'flex';
+    newDiv.style.justifyContent = 'center';
+
+    // 福引バナーを挿入
+    const parentElement = eventSection.parentNode;
+    parentElement.insertBefore(newDiv, eventSection.nextSibling);
 }
 
 // 挿入用に福引バナーをリメイク
