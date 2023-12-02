@@ -162,7 +162,7 @@ async function getFukubikiApi() {
         }
 
     } catch (error) {
-        console.error('try内エラー:', error);
+        console.error('エラーが発生しました:', error);
         return null;
     }
 }
