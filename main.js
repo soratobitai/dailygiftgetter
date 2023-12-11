@@ -66,42 +66,25 @@ async function getFukubikiElem() {
         const eventPageHtml = await response.text();
 
         // DOMオブジェクトを作成
-        const parser = new DOMParser();
-        const dom = parser.parseFromString(eventPageHtml, 'text/html');
+        const dom = new DOMParser().parseFromString(eventPageHtml, 'text/html');
 
         const anchorTags = dom.getElementsByTagName('a');
 
-        //////////////////////// イベントページから福引バナー要素を特定する
-        let href;
-        let imageTags;
-        let width;
-        let height;
-        let fukubikiElems = [];
-
-        for (let i = 0; i < anchorTags.length; i++) {
-
+        // イベントページから福引バナー要素を特定する
+        let fukubikiElems = Array.from(anchorTags).filter(anchor => {
             // 特定のURLを含むAタグかどうか
-            href = anchorTags[i].getAttribute('href');
-            if (!href || !href.includes('https://blog.nicovideo.jp/niconews/')) continue;
-
+            const href = anchor.getAttribute('href');
+            if (!href || !href.includes('https://blog.nicovideo.jp/niconews/')) return false;
             // 画像を含むかどうか
-            imageTags = anchorTags[i].getElementsByTagName('img');
-            if (!imageTags.length > 0) continue;
-
+            const imageTags = anchor.getElementsByTagName('img');
+            if (!imageTags.length > 0) return false;
             // 画像サイズ
-            width = imageTags[0].getAttribute('width');
-            height = imageTags[0].getAttribute('height');
-            if (!(width == '720' && height == '135')) continue;
+            const width = imageTags[0].getAttribute('width');
+            const height = imageTags[0].getAttribute('height');
+            return width === '720' && height === '135';
+        });
 
-            fukubikiElems.push(anchorTags[i]);
-        }
-
-        if (fukubikiElems.length === 0) {
-            return null;
-        } else {
-            return fukubikiElems[0];
-        }
-
+        return fukubikiElems.length > 0 ? fukubikiElems[0] : null;
     } catch (error) {
         console.error('エラーが発生しました:', error);
         return null;
@@ -113,12 +96,7 @@ function getEventURL() {
     
     const eventHeader = eventSection.querySelector('header');
     const eventElem = eventHeader.querySelector('a');
-
-    // 要素が存在しない場合やリンク要素でない場合はnullを返す
-    if (!eventElem || eventElem.tagName !== 'A') return null;
-
-    // リンクURLを返す
-    return removeAllParameters(eventElem.href);
+    return eventElem && eventElem.tagName === 'A' ? removeAllParameters(eventElem.href) : null;
 }
 
 // 福引ステータスAPIを取得
@@ -131,14 +109,8 @@ async function getFukubikiApi() {
 
         // レスポンスからHTMLを取得
         const html = await response.text();
-
-        // HTMLをパースしてDOMオブジェクトを作成
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-
-        const contents = doc.querySelector('[class*="contents"]');
-        const iframe = contents.querySelector('iframe');
-
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const iframe = doc.querySelector('[class*="contents"] iframe');
         if (!iframe) throw new Error('iframeが見つかりません。');
 
         let srcURL = iframe.getAttribute('src');
