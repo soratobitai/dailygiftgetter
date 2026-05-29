@@ -59,13 +59,13 @@ async function main() {
         const fukubikiInfo = await getFukubikiInfo(fukubikiURL);
         if (!fukubikiInfo) return warn('福引情報を特定できませんでした');
 
-        if (await isAvailable(fukubikiInfo.apiURL)) {
-            log('福引が未取得。ウィジェットを埋め込みます');
-            embedWidget(eventSection, fukubikiInfo.widgetSrc);
-        } else {
-            log('福引は取得済み');
-            insertBanner(eventSection, fukubikiElem, eventURL);
-        }
+        log(await isAvailable(fukubikiInfo.apiURL) ? '福引が未取得' : '福引は取得済み');
+
+        // 取得・未取得に関わらずバナーと福引ウィジェットの両方を表示する。
+        // 各関数はeventSection直後に挿入するため、後に呼んだ方が上に来る
+        // (バナーを上、ウィジェットを下に配置)。
+        embedWidget(eventSection, fukubikiInfo.widgetSrc);
+        insertBanner(eventSection, fukubikiElem, eventURL);
     } catch (error) {
         warn('処理中に予期しないエラー:', error);
     }
