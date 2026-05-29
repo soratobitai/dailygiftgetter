@@ -56,17 +56,16 @@ async function main() {
         const fukubikiURL = stripQuery(fukubikiElem.getAttribute('href'));
         if (!fukubikiURL) return warn('福引ページURLを取得できませんでした');
 
-        const apiURL = await getFukubikiApi(fukubikiURL);
-        if (!apiURL) return warn('福引APIを特定できませんでした');
+        const fukubikiInfo = await getFukubikiInfo(fukubikiURL);
+        if (!fukubikiInfo) return warn('福引情報を特定できませんでした');
 
-        if (await isAvailable(apiURL)) {
-            log('福引が未取得。ポップアップを開きます');
-            openFukubikiPopup(fukubikiURL);
+        if (await isAvailable(fukubikiInfo.apiURL)) {
+            log('福引が未取得。ウィジェットを埋め込みます');
+            embedWidget(eventSection, fukubikiInfo.widgetSrc);
         } else {
             log('福引は取得済み');
+            insertBanner(eventSection, fukubikiElem, eventURL);
         }
-
-        insertBanner(eventSection, fukubikiElem, eventURL);
     } catch (error) {
         warn('処理中に予期しないエラー:', error);
     }
@@ -122,8 +121,8 @@ async function getFukubikiElem(eventURL) {
     }
 }
 
-// 福引ページのiframe srcから福引ステータスAPIのURLを組み立てる
-async function getFukubikiApi(fukubikiURL) {
+// 福引ページのkokenウィジェットiframeから、埋め込み用src と ステータスAPI URL を得る
+async function getFukubikiInfo(fukubikiURL) {
     try {
         // background経由で取得(理由はgetFukubikiElem参照)
         const html = await fetchText(fukubikiURL);
@@ -136,9 +135,12 @@ async function getFukubikiApi(fukubikiURL) {
         const keyword = new URL(src).pathname.split('/').filter(Boolean).pop();
         if (!keyword) return warn('福引キーワードを抽出できませんでした'), null;
 
-        return `https://api.koken.nicovideo.jp/v1/lottery/${keyword}/setup`;
+        return {
+            widgetSrc: src,
+            apiURL: `https://api.koken.nicovideo.jp/v1/lottery/${keyword}/setup`,
+        };
     } catch (error) {
-        warn('福引API特定に失敗:', error);
+        warn('福引情報の特定に失敗:', error);
         return null;
     }
 }
@@ -156,15 +158,24 @@ async function isAvailable(apiURL) {
     }
 }
 
-// 福引ポップアップを開く
-function openFukubikiPopup(fukubikiURL) {
-    const url = new URL(fukubikiURL);
-    url.searchParams.set('getgift', 'on');
-    window.open(
-        url.href,
-        'nicogiftFukubiki',
-        'width=500,height=380,resizable=yes,location=no,toolbar=no,menubar=no',
-    );
+// 福引ウィジェットをライブ画面の下(イベント欄の直後)にiframeで直接埋め込む。
+// live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、ポップアップ不要。
+function embedWidget(eventSection, widgetSrc) {
+    if (document.querySelector('.nicogift-widget')) return; // 二重挿入防止
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'nicogift-widget';
+    wrapper.style.display = 'flex';
+    wrapper.style.justifyContent = 'center';
+
+    const iframe = document.createElement('iframe');
+    iframe.src = widgetSrc;
+    iframe.title = '福引';
+    // ウィジェットの実コンテンツ高さ(約634px)に合わせ、内部スクロールを避ける
+    iframe.style.cssText = 'width:500px;height:640px;border:0;';
+    wrapper.appendChild(iframe);
+
+    eventSection.parentNode.insertBefore(wrapper, eventSection.nextSibling);
 }
 
 // 福引バナーをライブ画面の下(イベント欄の直後)に挿入
