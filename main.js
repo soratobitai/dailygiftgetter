@@ -61,11 +61,8 @@ async function main() {
 
         log(await isAvailable(fukubikiInfo.apiURL) ? '福引が未取得' : '福引は取得済み');
 
-        // 取得・未取得に関わらずバナーと福引ウィジェットの両方を表示する。
-        // 各関数はeventSection直後に挿入するため、後に呼んだ方が上に来る
-        // (バナーを上、ウィジェットを下に配置)。
-        embedWidget(eventSection, fukubikiInfo.widgetSrc);
-        insertBanner(eventSection, fukubikiElem, eventURL);
+        // 取得・未取得に関わらず、福引ウィジェット(左)とバナー(右)を横並びで表示する。
+        insertFukubiki(eventSection, fukubikiInfo.widgetSrc, fukubikiElem, eventURL);
     } catch (error) {
         warn('処理中に予期しないエラー:', error);
     }
@@ -158,40 +155,30 @@ async function isAvailable(apiURL) {
     }
 }
 
-// 福引ウィジェットをライブ画面の下(イベント欄の直後)にiframeで直接埋め込む。
+// 福引ウィジェット(左)とバナー(右)を横並びで、ライブ画面の下(イベント欄の直後)に挿入。
 // live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、ポップアップ不要。
-function embedWidget(eventSection, widgetSrc) {
-    if (document.querySelector('.nicogift-widget')) return; // 二重挿入防止
+function insertFukubiki(eventSection, widgetSrc, fukubikiElem, eventURL) {
+    if (document.querySelector('.nicogift-row')) return; // 二重挿入防止
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'nicogift-widget';
-    wrapper.style.display = 'flex';
-    wrapper.style.justifyContent = 'center';
+    const row = document.createElement('div');
+    row.className = 'nicogift-row';
+    row.style.cssText = 'display:flex;justify-content:center;align-items:flex-start;gap:16px;flex-wrap:wrap;';
 
+    row.appendChild(buildWidget(widgetSrc)); // 左: ウィジェット
+    const banner = buildBanner(fukubikiElem, eventURL);
+    if (banner) row.appendChild(banner); // 右: バナー
+
+    eventSection.parentNode.insertBefore(row, eventSection.nextSibling);
+}
+
+// 福引ウィジェットのiframe要素を生成
+function buildWidget(widgetSrc) {
     const iframe = document.createElement('iframe');
     iframe.src = widgetSrc;
     iframe.title = '福引';
     // ウィジェットの実コンテンツ高さ(約634px)に合わせ、内部スクロールを避ける
-    iframe.style.cssText = 'width:500px;height:640px;border:0;';
-    wrapper.appendChild(iframe);
-
-    eventSection.parentNode.insertBefore(wrapper, eventSection.nextSibling);
-}
-
-// 福引バナーをライブ画面の下(イベント欄の直後)に挿入
-function insertBanner(eventSection, fukubikiElem, eventURL) {
-    if (document.querySelector('.nicogift-banner')) return; // 二重挿入防止
-
-    const banner = buildBanner(fukubikiElem, eventURL);
-    if (!banner) return warn('バナーを構築できませんでした');
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'nicogift-banner';
-    wrapper.style.display = 'flex';
-    wrapper.style.justifyContent = 'center';
-    wrapper.appendChild(banner);
-
-    eventSection.parentNode.insertBefore(wrapper, eventSection.nextSibling);
+    iframe.style.cssText = 'width:500px;height:640px;border:0;flex:none;';
+    return iframe;
 }
 
 // 挿入用に福引バナーの画像URLを実サイズに補正する
