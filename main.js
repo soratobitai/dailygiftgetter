@@ -271,7 +271,7 @@ async function getStatus(apiURL) {
 // 福引1件分の縦カラム(上:ウィジェット / 下:テキストリンク)をコンテナに追加。
 // live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、通常はポップアップ不要。
 // ただし動画広告型(needsRewardAd)は埋め込みiframe内で広告枠が埋まらず回せないため、
-// ウィジェットの代わりに別タブで公式ページを開くゲートリンクを表示する。
+// ウィジェットの代わりにポップアップで公式ページを開くゲートを表示する。
 function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRewardAd, gateImageUrl }) {
     if (container.querySelector(`.${colClass}`)) return; // 二重挿入防止
 
@@ -279,25 +279,44 @@ function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRew
     col.className = `nicogift-col ${colClass}`;
     col.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;flex:none;';
 
-    col.appendChild(needsRewardAd
-        ? buildGateLink(linkUrl, gateImageUrl)  // 上: 別タブで開くゲート(動画広告型)
-        : buildWidget(widgetSrc));              // 上: ウィジェット(縮小)
-    col.appendChild(buildTextLink(linkUrl, needsRewardAd ? `▶ ${label}（別タブで開く）` : label));
+    if (needsRewardAd) {
+        // 動画広告型は埋め込み不可。ゲート画像・テキストとも、クリックでポップアップを開く。
+        const gate = buildGateLink(gateImageUrl);
+        const text = buildTextLink(linkUrl, `▶ ${label}（ポップアップで開く）`);
+        for (const el of [gate, text]) bindPopup(el, linkUrl);
+        col.appendChild(gate);
+        col.appendChild(text);
+    } else {
+        col.appendChild(buildWidget(widgetSrc));            // 上: ウィジェット(縮小)
+        col.appendChild(buildTextLink(linkUrl, label));     // 下: テキストリンク
+    }
 
     container.appendChild(col);
 }
 
-// 動画広告型福引用: ウィジェット枠と同サイズで、別タブで公式ページを開くゲートリンク
-function buildGateLink(linkUrl, gateImageUrl) {
+// クリックで福引ページをポップアップ表示する(別タブ遷移を抑止)。
+// getgift=on を付けると event.js がローディング表示と福引へのスクロールを行う。
+// ポップアップはトップレベル文脈なので動画広告も再生できる。
+function bindPopup(anchor, url) {
+    anchor.removeAttribute('target');
+    anchor.addEventListener('click', (event) => {
+        event.preventDefault();
+        const popupURL = new URL(url);
+        popupURL.searchParams.set('getgift', 'on');
+        window.open(popupURL.href, 'nicogiftFukubiki',
+            'width=520,height=720,resizable=yes,scrollbars=yes');
+    });
+}
+
+// 動画広告型福引用: ウィジェット枠と同サイズのゲート(クリックはbindPopupで付与)
+function buildGateLink(gateImageUrl) {
     const a = document.createElement('a');
-    a.href = linkUrl;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    a.title = '動画広告は配信ページ内で再生できないため、別タブで開きます';
+    a.href = '#';
+    a.title = '動画広告は配信ページ内で再生できないため、ポップアップで開きます';
     a.style.cssText =
         'display:flex;align-items:center;justify-content:center;width:250px;height:320px;'
         + 'box-sizing:border-box;padding:8px;border:1px solid #ddd;border-radius:8px;'
-        + 'background:#f7f7f7;text-align:center;font-size:13px;color:#107fc9;text-decoration:none;';
+        + 'background:#f7f7f7;text-align:center;font-size:13px;color:#107fc9;text-decoration:none;cursor:pointer;';
 
     if (gateImageUrl) {
         const img = document.createElement('img');
@@ -306,7 +325,7 @@ function buildGateLink(linkUrl, gateImageUrl) {
         img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
         a.appendChild(img);
     } else {
-        a.textContent = '動画広告を見て福引（別タブで開く）';
+        a.textContent = '動画広告を見て福引（ポップアップで開く）';
     }
     return a;
 }
