@@ -4,6 +4,14 @@
     "description": "イベント開催中、無料ギフト福引をポップアップ表示します。",
     "version": "1.0.0",
     "author": "MynicoTools",
+    "host_permissions": [
+        "https://blog.nicovideo.jp/*",
+        "https://api.koken.nicovideo.jp/*",
+        "https://koken.nicovideo.jp/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
     "content_scripts": [
         {
             "matches": [

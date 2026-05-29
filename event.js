@@ -1,37 +1,38 @@
-// クエリを取得
-const url = new URL(window.location.href);
-const params = url.searchParams;
-const loading = `<div class="loading"><div class="circle"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
+/**
+ * 福引ページ(blog.nicovideo.jp/niconews/*)で動作するcontent script。
+ * getgift=on で開かれたポップアップ時はローディング表示と自動スクロールを行い、
+ * 通常閲覧時はevent.cssで隠したヘッダーを元に戻す。
+ */
 
-document.addEventListener('DOMContentLoaded', function () {
+const params = new URLSearchParams(location.search);
+const isGetGift = params.get('getgift') === 'on';
 
-    if (params.get('getgift') !== 'on') return;
+const LOADING_HTML = `<div class="loading"><div class="circle"><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
 
-    // ローディングを挿入
-    if (params.get('getgift') === 'on') {
-        document.body.insertAdjacentHTML("beforeend", loading);
-    };
+document.addEventListener('DOMContentLoaded', () => {
+    if (isGetGift) {
+        document.body.insertAdjacentHTML('beforeend', LOADING_HTML);
+    }
 });
 
-window.addEventListener('load', function () {
-
-    // CSSを戻す
+window.addEventListener('load', () => {
+    // CSSで付けた余白を戻す
     const contents = document.querySelector('[class*="contents"]');
-    contents.style.cssText = "margin-top: 0 !important;";
+    if (contents) contents.style.cssText = 'margin-top: 0 !important;';
 
-    if (params.get('getgift') !== 'on') {
-        // 表示戻す
-        CommonHeader.style.cssText = "display: block !important;";
-        document.querySelector('header').style.cssText = "display: flex !important;";
+    if (!isGetGift) {
+        // 通常閲覧時: event.cssで隠したヘッダーを表示に戻す
+        const commonHeader = document.getElementById('CommonHeader');
+        if (commonHeader) commonHeader.style.cssText = 'display: block !important;';
+        const header = document.querySelector('header');
+        if (header) header.style.cssText = 'display: flex !important;';
         return;
-    };
-
-    // 自動スクロール
-    const iframe = document.querySelector('iframe');
-    if (iframe) {
-        iframe.scrollIntoView();
     }
 
-    // ローディングを終了
-    document.querySelector('.loading').style.display = 'none';
+    // ポップアップ時: 福引iframeまでスクロールしてローディングを消す
+    const iframe = document.querySelector('iframe');
+    if (iframe) iframe.scrollIntoView();
+
+    const loading = document.querySelector('.loading');
+    if (loading) loading.style.display = 'none';
 });
