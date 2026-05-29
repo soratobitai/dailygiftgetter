@@ -64,10 +64,14 @@ async function main() {
         const container = await prepareContainer();
         if (!container) return warn('福引の挿入位置が見つかりませんでした');
 
-        // デイリー福引(全ページ・毎日)→ イベント福引(開催時のみ)の順に列を追加。
+        // イベント福引を先頭に表示する。event は prepend / daily は append なので、
+        // どちらが先に完了しても順序はイベント→デイリーになる。
+        // 非イベントページで event の待機(最大15秒)が daily を遅らせないよう並行実行。
         // 片方が失敗しても他方は表示されるよう、各処理は内部でエラーを握る。
-        await addDailyFukubiki(container);
-        await addEventFukubiki(container);
+        await Promise.all([
+            addEventFukubiki(container),
+            addDailyFukubiki(container),
+        ]);
     } catch (error) {
         warn('処理中に予期しないエラー:', error);
     }
@@ -143,6 +147,7 @@ async function addEventFukubiki(container) {
             linkUrl: elem.getAttribute('href'),
             label: cleanLabel(elem.querySelector('img')?.getAttribute('alt')),
             needsRewardAd: status.needsRewardAd,
+            prepend: true, // イベントは先頭に
         });
     } catch (error) {
         warn('イベント福引の処理に失敗:', error);
@@ -269,7 +274,7 @@ async function getStatus(apiURL) {
 // live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き埋め込みで回せる。
 // ただし動画広告型(needsRewardAd)は埋め込みiframe内で広告枠が埋まらず回せないため、
 // 見た目は同じウィジェットを表示しつつ、クリックはポップアップ送りにする。
-function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRewardAd }) {
+function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRewardAd, prepend }) {
     if (container.querySelector(`.${colClass}`)) return; // 二重挿入防止
 
     const col = document.createElement('div');
@@ -282,7 +287,8 @@ function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRew
     if (needsRewardAd) bindPopup(text, linkUrl);
     col.appendChild(text);
 
-    container.appendChild(col);
+    if (prepend) container.prepend(col);
+    else container.appendChild(col);
 }
 
 // クリックで福引ページをポップアップ表示する(通常の遷移を抑止)。
