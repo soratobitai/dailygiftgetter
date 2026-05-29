@@ -104,9 +104,15 @@ async function addDailyFukubiki(container) {
             const info = await getFukubikiInfo(fukubikiURL);
             if (!info) continue;
 
-            const status = await isAvailable(info.apiURL) ? '未取得' : '取得済み';
-            log(`デイリー福引(${conductor.id}): ${status}`);
-            appendColumn(container, `nicogift-daily-${conductor.id}`, info.widgetSrc, conductor.url, cleanLabel(conductor.text));
+            const status = await getStatus(info.apiURL);
+            log(`デイリー福引(${conductor.id}): ${status.available ? '未取得' : '取得済み'}`);
+            appendColumn(container, `nicogift-daily-${conductor.id}`, {
+                widgetSrc: info.widgetSrc,
+                linkUrl: conductor.url,
+                label: cleanLabel(conductor.text),
+                needsRewardAd: status.needsRewardAd,
+                gateImageUrl: status.gateImageUrl,
+            });
         } catch (error) {
             warn(`デイリー福引(${conductor.id})の処理に失敗:`, error);
         }
@@ -131,9 +137,15 @@ async function addEventFukubiki(container) {
         const info = await getFukubikiInfo(fukubikiURL);
         if (!info) return;
 
-        log(await isAvailable(info.apiURL) ? 'イベント福引: 未取得' : 'イベント福引: 取得済み');
-        const label = elem.querySelector('img')?.getAttribute('alt');
-        appendColumn(container, 'nicogift-event', info.widgetSrc, elem.getAttribute('href'), cleanLabel(label));
+        const status = await getStatus(info.apiURL);
+        log(`イベント福引: ${status.available ? '未取得' : '取得済み'}`);
+        appendColumn(container, 'nicogift-event', {
+            widgetSrc: info.widgetSrc,
+            linkUrl: elem.getAttribute('href'),
+            label: cleanLabel(elem.querySelector('img')?.getAttribute('alt')),
+            needsRewardAd: status.needsRewardAd,
+            gateImageUrl: status.gateImageUrl,
+        });
     } catch (error) {
         warn('イベント福引の処理に失敗:', error);
     }
@@ -238,32 +250,65 @@ async function getFukubikiInfo(fukubikiURL) {
     }
 }
 
-// 福引が未取得かどうかをAPIで確認(要ログイン)
-async function isAvailable(apiURL) {
+// 福引のステータスをAPIで取得(要ログイン)。
+// available: 未取得か / needsRewardAd: 動画広告視聴が必要か / gateImageUrl: ゲート画像
+async function getStatus(apiURL) {
     try {
         const res = await bgFetch(apiURL);
         if (!res?.ok) throw new Error(res?.error ?? `HTTP ${res?.status}`);
-        const json = JSON.parse(res.body);
-        return json?.data?.unavailableStatus !== 'AlreadyUsed';
+        const data = JSON.parse(res.body)?.data ?? {};
+        return {
+            available: data.unavailableStatus !== 'AlreadyUsed',
+            needsRewardAd: data.needsRewardAd === true,
+            gateImageUrl: data.gateImageUrl || null,
+        };
     } catch (error) {
         warn('福引ステータス確認に失敗:', error);
-        return false;
+        return { available: false, needsRewardAd: false, gateImageUrl: null };
     }
 }
 
-// 福引1件分の縦カラム(上:縮小ウィジェット / 下:テキストリンク)をコンテナに追加。
-// live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、ポップアップ不要。
-function appendColumn(container, colClass, widgetSrc, linkUrl, label) {
+// 福引1件分の縦カラム(上:ウィジェット / 下:テキストリンク)をコンテナに追加。
+// live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、通常はポップアップ不要。
+// ただし動画広告型(needsRewardAd)は埋め込みiframe内で広告枠が埋まらず回せないため、
+// ウィジェットの代わりに別タブで公式ページを開くゲートリンクを表示する。
+function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRewardAd, gateImageUrl }) {
     if (container.querySelector(`.${colClass}`)) return; // 二重挿入防止
 
     const col = document.createElement('div');
     col.className = `nicogift-col ${colClass}`;
     col.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;flex:none;';
 
-    col.appendChild(buildWidget(widgetSrc));        // 上: ウィジェット(縮小)
-    col.appendChild(buildTextLink(linkUrl, label)); // 下: テキストリンク
+    col.appendChild(needsRewardAd
+        ? buildGateLink(linkUrl, gateImageUrl)  // 上: 別タブで開くゲート(動画広告型)
+        : buildWidget(widgetSrc));              // 上: ウィジェット(縮小)
+    col.appendChild(buildTextLink(linkUrl, needsRewardAd ? `▶ ${label}（別タブで開く）` : label));
 
     container.appendChild(col);
+}
+
+// 動画広告型福引用: ウィジェット枠と同サイズで、別タブで公式ページを開くゲートリンク
+function buildGateLink(linkUrl, gateImageUrl) {
+    const a = document.createElement('a');
+    a.href = linkUrl;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.title = '動画広告は配信ページ内で再生できないため、別タブで開きます';
+    a.style.cssText =
+        'display:flex;align-items:center;justify-content:center;width:250px;height:320px;'
+        + 'box-sizing:border-box;padding:8px;border:1px solid #ddd;border-radius:8px;'
+        + 'background:#f7f7f7;text-align:center;font-size:13px;color:#107fc9;text-decoration:none;';
+
+    if (gateImageUrl) {
+        const img = document.createElement('img');
+        img.src = gateImageUrl;
+        img.alt = '福引を開く';
+        img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+        a.appendChild(img);
+    } else {
+        a.textContent = '動画広告を見て福引（別タブで開く）';
+    }
+    return a;
 }
 
 // 福引ウィジェットを標準サイズ(500x640)の半分に縮小して表示する要素を生成。
