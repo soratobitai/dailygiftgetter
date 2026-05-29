@@ -1,7 +1,7 @@
 /**
  * ライブ視聴ページ(live.nicovideo.jp/watch/*)で動作するcontent script。
  * 毎日無料の「デイリー福引」(全ページ)と、開催中イベントの福引(イベント時のみ)について、
- * 福引ウィジェットとバナーを配信ページ内に挿入する。福引ごとに1行(ウィジェット左+バナー右)。
+ * 縮小した福引ウィジェットと、その下のテキストリンクを、配信ページ内に横並びで挿入する。
  */
 
 const LOG = '[ニコ生ギフト]';
@@ -19,13 +19,17 @@ const BANNER_HEIGHT = '135';
 // 生HTMLには項目が無い(JS描画)ため、ページではなくこのAPIから取得する。
 const CONDUCTORS_API_URL =
     'https://api.koken.nicovideo.jp/v1/conductors?conductorFrameId=7&limit=100';
-// デイリー福引バナーの画像ファイル名パターン。
-// 例: conductors_free_202605_eiki_20260525.png (free_<年月>_<テーマ>_<日付8桁>)。
-// 末尾の日付はバナーが日替わりである印で、イベント系バナーには無いため識別に使える。
-const DAILY_BANNER_RE = /free_\d{6}_.+_\d{8}\.png/;
-// 福引コンテナを入れる全幅のホスト要素(末尾に追加)。イベント有無に関係なく存在し、
-// ウィジェット+バナーの横並び(約1236px)が収まる幅がある。上から順に最初に見つかったものを使う。
-const CONTAINER_HOST_SELECTORS = ['inner-content-area', 'ga-ns-watch-page'];
+// 常設デイリー福引バナーの画像ファイル名パターン(複数種を識別)。一致するconductorを全て表示する。
+// - free_<年月>_<テーマ>_<日付8桁>: 毎日無料デイリー福引(例 conductors_free_202605_eiki_20260525.png)
+// - reward_<年月>: ニコニコプラスデイリー福引/動画広告を見ると無料(例 reward_202412.png)
+// イベント専用バナーには無い構造で、常設のデイリー福引だけを識別できる。
+const DAILY_BANNER_PATTERNS = [
+    /free_\d{6}_.+_\d{8}\.png/,
+    /reward_\d{6}\.png/,
+];
+// 福引コンテナの挿入位置。この要素の直後にコンテナを挿入する。
+// ~= はクラストークン完全一致(-panel等の別要素を誤って拾わないため)。
+const ANCHOR_SELECTOR = '[class~="ga-ns-program-information"]';
 
 const params = new URLSearchParams(location.search);
 
@@ -57,12 +61,10 @@ async function main() {
     if (params.get('popup') === 'on') return;
 
     try {
-        const host = await waitForHost();
-        if (!host) return warn('福引の挿入位置が見つかりませんでした');
+        const container = await prepareContainer();
+        if (!container) return warn('福引の挿入位置が見つかりませんでした');
 
-        const container = ensureContainer(host);
-
-        // デイリー福引(全ページ・毎日)→ イベント福引(開催時のみ)の順に行を追加。
+        // デイリー福引(全ページ・毎日)→ イベント福引(開催時のみ)の順に列を追加。
         // 片方が失敗しても他方は表示されるよう、各処理は内部でエラーを握る。
         await addDailyFukubiki(container);
         await addEventFukubiki(container);
@@ -71,52 +73,43 @@ async function main() {
     }
 }
 
-// 福引コンテナのホスト要素が描画されるまで待つ
-function waitForHost(options) {
-    return pollFor(queryHost, options);
-}
-
-function queryHost() {
-    for (const sel of CONTAINER_HOST_SELECTORS) {
-        const el = document.querySelector(`[class*="${sel}"]`);
-        if (el) return el;
-    }
-    return null;
-}
-
-// ホスト内のフッター手前(無ければ末尾)に福引コンテナを作る(既にあれば再利用)
-function ensureContainer(host) {
+// アンカー要素の描画を待ち、その直後に福引コンテナ(横並び1行)を作る(既にあれば再利用)
+async function prepareContainer() {
     const existing = document.querySelector('.nicogift-container');
     if (existing) return existing;
 
+    const anchor = await pollFor(() => document.querySelector(ANCHOR_SELECTOR));
+    if (!anchor) return null;
+
     const container = document.createElement('div');
     container.className = 'nicogift-container';
+    // 複数の福引を横並び(1行)に。各福引は[ウィジェット+下にテキストリンク]の縦カラム。
+    container.style.cssText =
+        'display:flex;flex-direction:row;flex-wrap:wrap;gap:16px;align-items:flex-start;margin:12px 0;';
 
-    // フッターは直下の子から探す(insertBeforeは直下の子である必要があるため)
-    const footer = Array.from(host.children).find((c) => /footer-area/.test(c.className));
-    if (footer) host.insertBefore(container, footer);
-    else host.appendChild(container);
+    anchor.parentNode.insertBefore(container, anchor.nextSibling);
     return container;
 }
 
-// デイリー福引(毎日無料)の行を追加
+// 常設デイリー福引(該当する全種)を列として追加
 async function addDailyFukubiki(container) {
-    try {
-        const conductor = await getDailyConductor();
-        if (!conductor) return warn('デイリー福引が見つかりませんでした');
+    const conductors = await getDailyConductors();
+    if (!conductors.length) return warn('デイリー福引が見つかりませんでした');
 
-        const fukubikiURL = stripQuery(conductor.url);
-        if (!fukubikiURL) return warn('デイリー福引ページURLを取得できませんでした');
+    for (const conductor of conductors) {
+        try {
+            const fukubikiURL = stripQuery(conductor.url);
+            if (!fukubikiURL) continue;
 
-        const info = await getFukubikiInfo(fukubikiURL);
-        if (!info) return;
+            const info = await getFukubikiInfo(fukubikiURL);
+            if (!info) continue;
 
-        log(await isAvailable(info.apiURL) ? 'デイリー福引: 未取得' : 'デイリー福引: 取得済み');
-
-        const banner = makeBannerElem(conductor.bannerImageUrl, conductor.url, conductor.text);
-        appendRow(container, 'nicogift-daily', info.widgetSrc, banner, fukubikiURL);
-    } catch (error) {
-        warn('デイリー福引の処理に失敗:', error);
+            const status = await isAvailable(info.apiURL) ? '未取得' : '取得済み';
+            log(`デイリー福引(${conductor.id}): ${status}`);
+            appendColumn(container, `nicogift-daily-${conductor.id}`, info.widgetSrc, conductor.url, cleanLabel(conductor.text));
+        } catch (error) {
+            warn(`デイリー福引(${conductor.id})の処理に失敗:`, error);
+        }
     }
 }
 
@@ -139,35 +132,31 @@ async function addEventFukubiki(container) {
         if (!info) return;
 
         log(await isAvailable(info.apiURL) ? 'イベント福引: 未取得' : 'イベント福引: 取得済み');
-        appendRow(container, 'nicogift-event', info.widgetSrc, elem, eventURL);
+        const label = elem.querySelector('img')?.getAttribute('alt');
+        appendColumn(container, 'nicogift-event', info.widgetSrc, elem.getAttribute('href'), cleanLabel(label));
     } catch (error) {
         warn('イベント福引の処理に失敗:', error);
     }
 }
 
-// 福引一覧APIからデイリー福引のconductor({url, bannerImageUrl, text})を特定
-async function getDailyConductor() {
+// 福引一覧APIから常設デイリー福引のconductor({id, url, bannerImageUrl, text})を全て特定
+async function getDailyConductors() {
     try {
         const res = await bgFetch(CONDUCTORS_API_URL);
         if (!res?.ok) throw new Error(res?.error ?? `HTTP ${res?.status}`);
 
         const conductors = JSON.parse(res.body)?.data?.conductors ?? [];
-        return conductors.find((c) => DAILY_BANNER_RE.test(c.bannerImageUrl || '')) ?? null;
+        return conductors.filter((c) =>
+            DAILY_BANNER_PATTERNS.some((re) => re.test(c.bannerImageUrl || '')));
     } catch (error) {
         warn('福引一覧の取得に失敗:', error);
-        return null;
+        return [];
     }
 }
 
-// 画像URL・リンクURLからバナーのアンカー要素を生成(イベント福引のスクレイピング要素と同形)
-function makeBannerElem(imageUrl, linkUrl, alt) {
-    const anchor = document.createElement('a');
-    anchor.href = linkUrl;
-    const img = document.createElement('img');
-    img.src = imageUrl;
-    img.alt = alt || '';
-    anchor.appendChild(img);
-    return anchor;
+// ラベル文字列を1行に整形(改行・連続空白をまとめる)
+function cleanLabel(text) {
+    return (text || '').replace(/\s+/g, ' ').trim();
 }
 
 // 条件を満たす要素が現れるまでポーリング(Reactの遅延描画対策)。timeoutでnull
@@ -262,48 +251,49 @@ async function isAvailable(apiURL) {
     }
 }
 
-// 福引の1行(ウィジェット左+バナー右)をコンテナに追加。
+// 福引1件分の縦カラム(上:縮小ウィジェット / 下:テキストリンク)をコンテナに追加。
 // live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、ポップアップ不要。
-function appendRow(container, rowClass, widgetSrc, bannerElem, baseURL) {
-    if (container.querySelector(`.${rowClass}`)) return; // 二重挿入防止
+function appendColumn(container, colClass, widgetSrc, linkUrl, label) {
+    if (container.querySelector(`.${colClass}`)) return; // 二重挿入防止
 
-    const row = document.createElement('div');
-    row.className = `nicogift-row ${rowClass}`;
-    row.style.cssText =
-        'display:flex;justify-content:center;align-items:flex-start;gap:16px;flex-wrap:wrap;margin:8px 0;';
+    const col = document.createElement('div');
+    col.className = `nicogift-col ${colClass}`;
+    col.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;flex:none;';
 
-    row.appendChild(buildWidget(widgetSrc)); // 左: ウィジェット
-    const banner = buildBanner(bannerElem, baseURL);
-    if (banner) row.appendChild(banner); // 右: バナー
+    col.appendChild(buildWidget(widgetSrc));        // 上: ウィジェット(縮小)
+    col.appendChild(buildTextLink(linkUrl, label)); // 下: テキストリンク
 
-    container.appendChild(row);
+    container.appendChild(col);
 }
 
-// 福引ウィジェットのiframe要素を生成
+// 福引ウィジェットを標準サイズ(500x640)の半分に縮小して表示する要素を生成。
+// transformは描画のみ縮小しレイアウト枠は元のままなので、wrapperで縮小後の実寸を確保する。
 function buildWidget(widgetSrc) {
+    const W = 500, H = 640, SCALE = 0.5;
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `width:${W * SCALE}px;height:${H * SCALE}px;overflow:hidden;`;
+
     const iframe = document.createElement('iframe');
     iframe.src = widgetSrc;
     iframe.title = '福引';
-    // ウィジェットの実コンテンツ高さ(約634px)に合わせ、内部スクロールを避ける
-    iframe.style.cssText = 'width:500px;height:640px;border:0;flex:none;';
-    return iframe;
+    iframe.style.cssText =
+        `width:${W}px;height:${H}px;border:0;transform:scale(${SCALE});transform-origin:top left;`;
+
+    wrap.appendChild(iframe);
+    return wrap;
 }
 
-// 挿入用に福引バナーの画像URLを実サイズに補正する
-function buildBanner(bannerElem, baseURL) {
-    const img = bannerElem.querySelector('img');
-    if (!img) return null;
-
-    const path = (img.getAttribute('src') || '').replace('-150x135', '');
-    // 画像が絶対URLならそのまま、相対パスならページのドメインを前置
-    const imgURL = /^https?:\/\//.test(path) ? path : new URL(baseURL).origin + path;
-
-    img.src = imgURL;
-    img.srcset = imgURL;
-    bannerElem.setAttribute('target', '_blank');
-    bannerElem.style.display = 'block';
-    bannerElem.style.textAlign = 'center';
-    return bannerElem;
+// 福引ページへのテキストリンクを生成
+function buildTextLink(url, label) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = label || '福引ページを開く';
+    a.style.cssText =
+        'display:block;max-width:250px;text-align:center;font-size:12px;line-height:1.3;color:#107fc9;text-decoration:underline;word-break:break-word;';
+    return a;
 }
 
 // background経由のfetch。ページのCORS制約を受けず、ログインCookieも確実に送られる。
