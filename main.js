@@ -111,7 +111,6 @@ async function addDailyFukubiki(container) {
                 linkUrl: conductor.url,
                 label: cleanLabel(conductor.text),
                 needsRewardAd: status.needsRewardAd,
-                gateImageUrl: status.gateImageUrl,
             });
         } catch (error) {
             warn(`デイリー福引(${conductor.id})の処理に失敗:`, error);
@@ -144,7 +143,6 @@ async function addEventFukubiki(container) {
             linkUrl: elem.getAttribute('href'),
             label: cleanLabel(elem.querySelector('img')?.getAttribute('alt')),
             needsRewardAd: status.needsRewardAd,
-            gateImageUrl: status.gateImageUrl,
         });
     } catch (error) {
         warn('イベント福引の処理に失敗:', error);
@@ -251,7 +249,7 @@ async function getFukubikiInfo(fukubikiURL) {
 }
 
 // 福引のステータスをAPIで取得(要ログイン)。
-// available: 未取得か / needsRewardAd: 動画広告視聴が必要か / gateImageUrl: ゲート画像
+// available: 未取得か / needsRewardAd: 動画広告視聴が必要か(=埋め込みでは回せずポップアップ送り)
 async function getStatus(apiURL) {
     try {
         const res = await bgFetch(apiURL);
@@ -260,41 +258,34 @@ async function getStatus(apiURL) {
         return {
             available: data.unavailableStatus !== 'AlreadyUsed',
             needsRewardAd: data.needsRewardAd === true,
-            gateImageUrl: data.gateImageUrl || null,
         };
     } catch (error) {
         warn('福引ステータス確認に失敗:', error);
-        return { available: false, needsRewardAd: false, gateImageUrl: null };
+        return { available: false, needsRewardAd: false };
     }
 }
 
 // 福引1件分の縦カラム(上:ウィジェット / 下:テキストリンク)をコンテナに追加。
-// live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、通常はポップアップ不要。
+// live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き埋め込みで回せる。
 // ただし動画広告型(needsRewardAd)は埋め込みiframe内で広告枠が埋まらず回せないため、
-// ウィジェットの代わりにポップアップで公式ページを開くゲートを表示する。
-function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRewardAd, gateImageUrl }) {
+// 見た目は同じウィジェットを表示しつつ、クリックはポップアップ送りにする。
+function appendColumn(container, colClass, { widgetSrc, linkUrl, label, needsRewardAd }) {
     if (container.querySelector(`.${colClass}`)) return; // 二重挿入防止
 
     const col = document.createElement('div');
     col.className = `nicogift-col ${colClass}`;
     col.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:6px;flex:none;';
 
-    if (needsRewardAd) {
-        // 動画広告型は埋め込み不可。ゲート画像・テキストとも、クリックでポップアップを開く。
-        const gate = buildGateLink(gateImageUrl);
-        const text = buildTextLink(linkUrl, `▶ ${label}（ポップアップで開く）`);
-        for (const el of [gate, text]) bindPopup(el, linkUrl);
-        col.appendChild(gate);
-        col.appendChild(text);
-    } else {
-        col.appendChild(buildWidget(widgetSrc));            // 上: ウィジェット(縮小)
-        col.appendChild(buildTextLink(linkUrl, label));     // 下: テキストリンク
-    }
+    // 動画広告型のみ、ウィジェットにポップアップを開くクリック層を重ねる(popupUrlを渡す)
+    col.appendChild(buildWidget(widgetSrc, needsRewardAd ? linkUrl : null)); // 上: ウィジェット
+    const text = buildTextLink(linkUrl, label);                              // 下: テキストリンク
+    if (needsRewardAd) bindPopup(text, linkUrl);
+    col.appendChild(text);
 
     container.appendChild(col);
 }
 
-// クリックで福引ページをポップアップ表示する(別タブ遷移を抑止)。
+// クリックで福引ページをポップアップ表示する(通常の遷移を抑止)。
 // getgift=on を付けると event.js がローディング表示と福引へのスクロールを行う。
 // ポップアップはトップレベル文脈なので動画広告も再生できる。
 function bindPopup(anchor, url) {
@@ -308,43 +299,33 @@ function bindPopup(anchor, url) {
     });
 }
 
-// 動画広告型福引用: ウィジェット枠と同サイズのゲート(クリックはbindPopupで付与)
-function buildGateLink(gateImageUrl) {
-    const a = document.createElement('a');
-    a.href = '#';
-    a.title = '動画広告は配信ページ内で再生できないため、ポップアップで開きます';
-    a.style.cssText =
-        'display:flex;align-items:center;justify-content:center;width:250px;height:320px;'
-        + 'box-sizing:border-box;padding:8px;border:1px solid #ddd;border-radius:8px;'
-        + 'background:#f7f7f7;text-align:center;font-size:13px;color:#107fc9;text-decoration:none;cursor:pointer;';
-
-    if (gateImageUrl) {
-        const img = document.createElement('img');
-        img.src = gateImageUrl;
-        img.alt = '福引を開く';
-        img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
-        a.appendChild(img);
-    } else {
-        a.textContent = '動画広告を見て福引（ポップアップで開く）';
-    }
-    return a;
-}
-
 // 福引ウィジェットを標準サイズ(500x640)の半分に縮小して表示する要素を生成。
 // transformは描画のみ縮小しレイアウト枠は元のままなので、wrapperで縮小後の実寸を確保する。
-function buildWidget(widgetSrc) {
+// popupUrlを渡すと、ウィジェット全体を覆う透明クリック層を重ねてポップアップを開く
+// (クロスオリジンiframe内のクリックは親から捕捉できないため、動画広告型で使う)。
+function buildWidget(widgetSrc, popupUrl) {
     const W = 500, H = 640, SCALE = 0.5;
 
     const wrap = document.createElement('div');
-    wrap.style.cssText = `width:${W * SCALE}px;height:${H * SCALE}px;overflow:hidden;`;
+    wrap.style.cssText = `position:relative;width:${W * SCALE}px;height:${H * SCALE}px;overflow:hidden;`;
 
     const iframe = document.createElement('iframe');
     iframe.src = widgetSrc;
     iframe.title = '福引';
     iframe.style.cssText =
         `width:${W}px;height:${H}px;border:0;transform:scale(${SCALE});transform-origin:top left;`;
-
     wrap.appendChild(iframe);
+
+    if (popupUrl) {
+        iframe.style.pointerEvents = 'none'; // クリックは下のiframeに通さずオーバーレイで受ける
+        const overlay = document.createElement('a');
+        overlay.href = '#';
+        overlay.title = '動画広告は配信ページ内で再生できないため、ポップアップで開きます';
+        overlay.style.cssText = 'position:absolute;inset:0;cursor:pointer;';
+        bindPopup(overlay, popupUrl);
+        wrap.appendChild(overlay);
+    }
+
     return wrap;
 }
 
