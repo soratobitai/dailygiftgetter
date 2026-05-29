@@ -1,6 +1,7 @@
 /**
  * ライブ視聴ページ(live.nicovideo.jp/watch/*)で動作するcontent script。
- * 開催中イベントの福引が未取得なら福引ポップアップを開き、福引バナーを画面下に挿入する。
+ * 毎日無料の「デイリー福引」(全ページ)と、開催中イベントの福引(イベント時のみ)について、
+ * 福引ウィジェットとバナーを配信ページ内に挿入する。福引ごとに1行(ウィジェット左+バナー右)。
  */
 
 const LOG = '[ニコ生ギフト]';
@@ -13,6 +14,18 @@ const EVENT_SECTION_XPATH =
 const NICONEWS_PREFIX = 'https://blog.nicovideo.jp/niconews/';
 const BANNER_WIDTH = '720';
 const BANNER_HEIGHT = '135';
+
+// 毎日無料のデイリー福引を含むキャンペーン一覧API(JSON)。福引一覧ページ(SPA)のデータソース。
+// 生HTMLには項目が無い(JS描画)ため、ページではなくこのAPIから取得する。
+const CONDUCTORS_API_URL =
+    'https://api.koken.nicovideo.jp/v1/conductors?conductorFrameId=7&limit=100';
+// デイリー福引バナーの画像ファイル名パターン。
+// 例: conductors_free_202605_eiki_20260525.png (free_<年月>_<テーマ>_<日付8桁>)。
+// 末尾の日付はバナーが日替わりである印で、イベント系バナーには無いため識別に使える。
+const DAILY_BANNER_RE = /free_\d{6}_.+_\d{8}\.png/;
+// 福引コンテナを入れる全幅のホスト要素(末尾に追加)。イベント有無に関係なく存在し、
+// ウィジェット+バナーの横並び(約1236px)が収まる幅がある。上から順に最初に見つかったものを使う。
+const CONTAINER_HOST_SELECTORS = ['inner-content-area', 'ga-ns-watch-page'];
 
 const params = new URLSearchParams(location.search);
 
@@ -44,45 +57,139 @@ async function main() {
     if (params.get('popup') === 'on') return;
 
     try {
+        const host = await waitForHost();
+        if (!host) return warn('福引の挿入位置が見つかりませんでした');
+
+        const container = ensureContainer(host);
+
+        // デイリー福引(全ページ・毎日)→ イベント福引(開催時のみ)の順に行を追加。
+        // 片方が失敗しても他方は表示されるよう、各処理は内部でエラーを握る。
+        await addDailyFukubiki(container);
+        await addEventFukubiki(container);
+    } catch (error) {
+        warn('処理中に予期しないエラー:', error);
+    }
+}
+
+// 福引コンテナのホスト要素が描画されるまで待つ
+function waitForHost(options) {
+    return pollFor(queryHost, options);
+}
+
+function queryHost() {
+    for (const sel of CONTAINER_HOST_SELECTORS) {
+        const el = document.querySelector(`[class*="${sel}"]`);
+        if (el) return el;
+    }
+    return null;
+}
+
+// ホスト内のフッター手前(無ければ末尾)に福引コンテナを作る(既にあれば再利用)
+function ensureContainer(host) {
+    const existing = document.querySelector('.nicogift-container');
+    if (existing) return existing;
+
+    const container = document.createElement('div');
+    container.className = 'nicogift-container';
+
+    // フッターは直下の子から探す(insertBeforeは直下の子である必要があるため)
+    const footer = Array.from(host.children).find((c) => /footer-area/.test(c.className));
+    if (footer) host.insertBefore(container, footer);
+    else host.appendChild(container);
+    return container;
+}
+
+// デイリー福引(毎日無料)の行を追加
+async function addDailyFukubiki(container) {
+    try {
+        const conductor = await getDailyConductor();
+        if (!conductor) return warn('デイリー福引が見つかりませんでした');
+
+        const fukubikiURL = stripQuery(conductor.url);
+        if (!fukubikiURL) return warn('デイリー福引ページURLを取得できませんでした');
+
+        const info = await getFukubikiInfo(fukubikiURL);
+        if (!info) return;
+
+        log(await isAvailable(info.apiURL) ? 'デイリー福引: 未取得' : 'デイリー福引: 取得済み');
+
+        const banner = makeBannerElem(conductor.bannerImageUrl, conductor.url, conductor.text);
+        appendRow(container, 'nicogift-daily', info.widgetSrc, banner, fukubikiURL);
+    } catch (error) {
+        warn('デイリー福引の処理に失敗:', error);
+    }
+}
+
+// イベント福引(イベント開催時のみ)の行を追加
+async function addEventFukubiki(container) {
+    try {
         const eventSection = await waitForEventSection();
         if (!eventSection) return log('イベント欄なし(イベント未開催)');
 
         const eventURL = getEventURL(eventSection);
         if (!eventURL) return warn('イベントページURLを取得できませんでした');
 
-        const fukubikiElem = await getFukubikiElem(eventURL);
-        if (!fukubikiElem) return warn('福引バナーが見つかりませんでした');
+        const elem = await getFukubikiElem(eventURL);
+        if (!elem) return warn('イベント福引バナーが見つかりませんでした');
 
-        const fukubikiURL = stripQuery(fukubikiElem.getAttribute('href'));
+        const fukubikiURL = stripQuery(elem.getAttribute('href'));
         if (!fukubikiURL) return warn('福引ページURLを取得できませんでした');
 
-        const fukubikiInfo = await getFukubikiInfo(fukubikiURL);
-        if (!fukubikiInfo) return warn('福引情報を特定できませんでした');
+        const info = await getFukubikiInfo(fukubikiURL);
+        if (!info) return;
 
-        log(await isAvailable(fukubikiInfo.apiURL) ? '福引が未取得' : '福引は取得済み');
-
-        // 取得・未取得に関わらず、福引ウィジェット(左)とバナー(右)を横並びで表示する。
-        insertFukubiki(eventSection, fukubikiInfo.widgetSrc, fukubikiElem, eventURL);
+        log(await isAvailable(info.apiURL) ? 'イベント福引: 未取得' : 'イベント福引: 取得済み');
+        appendRow(container, 'nicogift-event', info.widgetSrc, elem, eventURL);
     } catch (error) {
-        warn('処理中に予期しないエラー:', error);
+        warn('イベント福引の処理に失敗:', error);
     }
 }
 
-// イベント欄が描画されるまで待つ(Reactによる遅延描画対策)
-function waitForEventSection({ timeout = 15000, interval = 500 } = {}) {
+// 福引一覧APIからデイリー福引のconductor({url, bannerImageUrl, text})を特定
+async function getDailyConductor() {
+    try {
+        const res = await bgFetch(CONDUCTORS_API_URL);
+        if (!res?.ok) throw new Error(res?.error ?? `HTTP ${res?.status}`);
+
+        const conductors = JSON.parse(res.body)?.data?.conductors ?? [];
+        return conductors.find((c) => DAILY_BANNER_RE.test(c.bannerImageUrl || '')) ?? null;
+    } catch (error) {
+        warn('福引一覧の取得に失敗:', error);
+        return null;
+    }
+}
+
+// 画像URL・リンクURLからバナーのアンカー要素を生成(イベント福引のスクレイピング要素と同形)
+function makeBannerElem(imageUrl, linkUrl, alt) {
+    const anchor = document.createElement('a');
+    anchor.href = linkUrl;
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.alt = alt || '';
+    anchor.appendChild(img);
+    return anchor;
+}
+
+// 条件を満たす要素が現れるまでポーリング(Reactの遅延描画対策)。timeoutでnull
+function pollFor(query, { timeout = 15000, interval = 500 } = {}) {
     return new Promise((resolve) => {
-        const first = queryEventSection();
+        const first = query();
         if (first) return resolve(first);
 
         const start = Date.now();
         const timer = setInterval(() => {
-            const el = queryEventSection();
+            const el = query();
             if (el || Date.now() - start >= timeout) {
                 clearInterval(timer);
                 resolve(el || null);
             }
         }, interval);
     });
+}
+
+// イベント欄が描画されるまで待つ
+function waitForEventSection(options) {
+    return pollFor(queryEventSection, options);
 }
 
 function queryEventSection() {
@@ -155,20 +262,21 @@ async function isAvailable(apiURL) {
     }
 }
 
-// 福引ウィジェット(左)とバナー(右)を横並びで、ライブ画面の下(イベント欄の直後)に挿入。
+// 福引の1行(ウィジェット左+バナー右)をコンテナに追加。
 // live と koken は同一サイト(nicovideo.jp)なのでログインCookieが効き、ポップアップ不要。
-function insertFukubiki(eventSection, widgetSrc, fukubikiElem, eventURL) {
-    if (document.querySelector('.nicogift-row')) return; // 二重挿入防止
+function appendRow(container, rowClass, widgetSrc, bannerElem, baseURL) {
+    if (container.querySelector(`.${rowClass}`)) return; // 二重挿入防止
 
     const row = document.createElement('div');
-    row.className = 'nicogift-row';
-    row.style.cssText = 'display:flex;justify-content:center;align-items:flex-start;gap:16px;flex-wrap:wrap;';
+    row.className = `nicogift-row ${rowClass}`;
+    row.style.cssText =
+        'display:flex;justify-content:center;align-items:flex-start;gap:16px;flex-wrap:wrap;margin:8px 0;';
 
     row.appendChild(buildWidget(widgetSrc)); // 左: ウィジェット
-    const banner = buildBanner(fukubikiElem, eventURL);
+    const banner = buildBanner(bannerElem, baseURL);
     if (banner) row.appendChild(banner); // 右: バナー
 
-    eventSection.parentNode.insertBefore(row, eventSection.nextSibling);
+    container.appendChild(row);
 }
 
 // 福引ウィジェットのiframe要素を生成
@@ -182,20 +290,20 @@ function buildWidget(widgetSrc) {
 }
 
 // 挿入用に福引バナーの画像URLを実サイズに補正する
-function buildBanner(fukubikiElem, eventURL) {
-    const img = fukubikiElem.querySelector('img');
+function buildBanner(bannerElem, baseURL) {
+    const img = bannerElem.querySelector('img');
     if (!img) return null;
 
     const path = (img.getAttribute('src') || '').replace('-150x135', '');
-    // 画像が外部ドメインの絶対URLならそのまま、相対パスならイベントページのドメインを前置
-    const imgURL = /^https?:\/\//.test(path) ? path : new URL(eventURL).origin + path;
+    // 画像が絶対URLならそのまま、相対パスならページのドメインを前置
+    const imgURL = /^https?:\/\//.test(path) ? path : new URL(baseURL).origin + path;
 
     img.src = imgURL;
     img.srcset = imgURL;
-    fukubikiElem.setAttribute('target', '_blank');
-    fukubikiElem.style.display = 'block';
-    fukubikiElem.style.textAlign = 'center';
-    return fukubikiElem;
+    bannerElem.setAttribute('target', '_blank');
+    bannerElem.style.display = 'block';
+    bannerElem.style.textAlign = 'center';
+    return bannerElem;
 }
 
 // background経由のfetch。ページのCORS制約を受けず、ログインCookieも確実に送られる。
